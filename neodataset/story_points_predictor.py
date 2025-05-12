@@ -5,6 +5,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error
 from sklearn.dummy import DummyRegressor
+from sklearn.preprocessing import MinMaxScaler
 from datasets import load_dataset
 from tabulate import tabulate
 import textstat
@@ -17,12 +18,34 @@ import nltk
 nltk.download('punkt')
 
 # Load the dataset
-ds = load_dataset("giseldo/neodataset")
-df = ds["train"].to_pandas()
+import pandas as pd
+df = pd.read_csv("hf://datasets/giseldo/neodataset/issues.csv")
+
+df = df[df['idproject'] == 10152778]
+print(f"Number of rows after filtering by project ID 764: {len(df)}")
 
 # Remove rows with NA values in storypoints, title or description
 df = df.dropna(subset=['storypoints', 'title', 'description'])
 print(f"Number of rows after removing NA values: {len(df)}")
+
+# Define Fibonacci sequence for story points
+FIBONACCI_SEQUENCE = [1, 2, 3, 5, 8, 13, 21, 34, 55, 89]
+
+def round_to_fibonacci(value):
+    """
+    Rounds a number to the nearest Fibonacci number in the sequence.
+    If the value is less than 1, returns 1.
+    If the value is greater than 89, returns 89.
+    """
+    if value < 1:
+        return 1
+    if value > 89:
+        return 89
+    return min(FIBONACCI_SEQUENCE, key=lambda x: abs(x - value))
+
+# Normalize story points
+scaler = MinMaxScaler()
+df['storypoints_normalized'] = scaler.fit_transform(df[['storypoints']])
 
 # Function to preprocess text
 def preprocess_text(text):
@@ -86,7 +109,7 @@ tfidf = TfidfVectorizer(
 X_tfidf = tfidf.fit_transform(df['combined_text'])
 X_readability = readability_df.values
 X_word2vec = word2vec_features
-y = df['storypoints']
+y = df['storypoints_normalized']
 
 # Split the data
 X_tfidf_train, X_tfidf_test, X_readability_train, X_readability_test, X_word2vec_train, X_word2vec_test, y_train, y_test = train_test_split(
@@ -117,16 +140,16 @@ word2vec_model_reg.fit(X_word2vec_train, y_train)
 word2vec_pred = word2vec_model_reg.predict(X_word2vec_test)
 word2vec_mae = mean_absolute_error(y_test, word2vec_pred)
 
-# Create comparison table
+# Create comparison table with denormalized MAE
 comparison_table = [
-    ["Model", "MAE"],
-    ["Dummy (Mean)", f"{dummy_mae:.2f}"],
-    ["TF-IDF + Linear Regression", f"{tfidf_mae:.2f}"],
-    ["Readability + Linear Regression", f"{readability_mae:.2f}"],
-    ["Word2Vec + Linear Regression", f"{word2vec_mae:.2f}"]
+    ["Model", "MAE (Original Scale)"],
+    ["Dummy (Mean)", f"{dummy_mae * (df['storypoints'].max() - df['storypoints'].min()):.2f}"],
+    ["TF-IDF + Linear Regression", f"{tfidf_mae * (df['storypoints'].max() - df['storypoints'].min()):.2f}"],
+    ["Readability + Linear Regression", f"{readability_mae * (df['storypoints'].max() - df['storypoints'].min()):.2f}"],
+    ["Word2Vec + Linear Regression", f"{word2vec_mae * (df['storypoints'].max() - df['storypoints'].min()):.2f}"]
 ]
 
-print("\nModel Comparison:")
+print("\nModel Comparison (Original Scale):")
 print(tabulate(comparison_table, headers="firstrow", tablefmt="grid"))
 
 # Function to predict story points using TF-IDF model
@@ -136,8 +159,11 @@ def predict_story_points_tfidf(user_story_title, user_story_description=""):
     # Transform the input text
     X_new = tfidf.transform([combined_text])
     # Make prediction
-    prediction = tfidf_model.predict(X_new)
-    return prediction[0]
+    prediction_normalized = tfidf_model.predict(X_new)[0]
+    # Convert back to original scale
+    prediction = scaler.inverse_transform([[prediction_normalized]])[0][0]
+    # Round to nearest Fibonacci number
+    return round_to_fibonacci(prediction)
 
 # Function to predict story points using Readability model
 def predict_story_points_readability(user_story_title, user_story_description=""):
@@ -146,8 +172,11 @@ def predict_story_points_readability(user_story_title, user_story_description=""
     # Extract readability features
     features = extract_readability_features(combined_text)
     # Make prediction
-    prediction = readability_model.predict([list(features.values())])
-    return prediction[0]
+    prediction_normalized = readability_model.predict([list(features.values())])[0]
+    # Convert back to original scale
+    prediction = scaler.inverse_transform([[prediction_normalized]])[0][0]
+    # Round to nearest Fibonacci number
+    return round_to_fibonacci(prediction)
 
 # Function to predict story points using Word2Vec model
 def predict_story_points_word2vec(user_story_title, user_story_description=""):
@@ -156,8 +185,11 @@ def predict_story_points_word2vec(user_story_title, user_story_description=""):
     # Get document vector
     doc_vector = get_document_vector(combined_text, word2vec_model)
     # Make prediction
-    prediction = word2vec_model_reg.predict([doc_vector])
-    return prediction[0]
+    prediction_normalized = word2vec_model_reg.predict([doc_vector])[0]
+    # Convert back to original scale
+    prediction = scaler.inverse_transform([[prediction_normalized]])[0][0]
+    # Round to nearest Fibonacci number
+    return round_to_fibonacci(prediction)
 
 # Example usage
 example_title = "As a user, I want to be able to log in to the system"
@@ -168,9 +200,9 @@ tfidf_prediction = predict_story_points_tfidf(example_title, example_description
 readability_prediction = predict_story_points_readability(example_title, example_description)
 word2vec_prediction = predict_story_points_word2vec(example_title, example_description)
 
-print(f"\nExample predictions:")
+print(f"\nExample predictions (Fibonacci Scale):")
 print(f"User Story Title: {example_title}")
 print(f"User Story Description: {example_description}")
-print(f"TF-IDF Model Prediction: {tfidf_prediction:.2f}")
-print(f"Readability Model Prediction: {readability_prediction:.2f}")
-print(f"Word2Vec Model Prediction: {word2vec_prediction:.2f}") 
+print(f"TF-IDF Model Prediction: {tfidf_prediction}")
+print(f"Readability Model Prediction: {readability_prediction}")
+print(f"Word2Vec Model Prediction: {word2vec_prediction}") 
