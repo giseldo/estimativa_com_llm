@@ -1,0 +1,4 @@
+tabulate
+sklearn
+texstat
+gensim
